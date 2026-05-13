@@ -5,11 +5,11 @@ Visibility rule:
   If a body part required for a step is NOT VISIBLE, that step scores 0
   with a clear "not visible" message.
 
-NEW (Score-zero hiding):
-  Any step whose score == 0 is marked with `hide_from_ui = True` so the UI
-  can skip rendering that card. In the FINAL score calculation, those zero
-  scores are replaced with 50 (neutral), so a single zero does not crater
-  the total.
+SCORE-ZERO HIDING (refined logic):
+  Only steps marked `not_visible = True` are hidden from UI and substituted
+  with effective_score=50 in the formula. A step that GENUINELY scored 0
+  due to a bad pose (e.g., shoulders hunched up) stays VISIBLE in the UI
+  and uses its raw score (0) in the formula.
 """
 
 import math
@@ -205,18 +205,17 @@ def validate_pose(features, step_visibility=None):
         check_shoulders_relaxed(features, step_visibility.get(6, True)),
     ]
 
-    # NEW LOGIC: Mark zero-score steps to hide from UI, substitute 50 in formula.
-    # This prevents a single "0" (whether from a hidden body part or a genuinely
-    # bad rep) from cratering the final score. The UI skips these cards entirely.
+    # REFINED LOGIC:
+    # Only NOT-VISIBLE steps get hidden + substituted with 50.
+    # A step that genuinely scored 0 due to bad pose STAYS VISIBLE with score 0.
     for s in step_results:
-        if s["score"] == 0.0:
+        if s.get("not_visible"):
             s["hide_from_ui"] = True
-            s["effective_score"] = 50.0
+            s["effective_score"] = 50.0   # not visible -> neutral substitute
         else:
             s["hide_from_ui"] = False
-            s["effective_score"] = s["score"]
+            s["effective_score"] = s["score"]   # genuine score (could be 0)
 
-    # Final-score formula uses effective_score (50 for hidden steps)
     base_score = 0.0
     for s in step_results:
         s["weight"] = STEP_WEIGHTS[s["step"]]
@@ -244,7 +243,8 @@ def validate_pose(features, step_visibility=None):
     final_score = int(round(final_score))
     final_score = max(0, min(100, final_score))
 
-    # Don't include hidden steps in the visible issues list
+    # Issues list excludes only hidden (not-visible) steps;
+    # genuine failure issues SHOULD show
     issues = [s["issue"] for s in step_results
               if s["issue"] and not s.get("hide_from_ui")]
 
