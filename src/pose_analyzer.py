@@ -1,17 +1,13 @@
 """
 Pose analyzer for Child's Pose - one-side visibility rule.
 
-Two entry points:
-  - analyze_video(path)  : process video frame by frame, aggregate scores
-  - analyze_image(path)  : process a single photo
-
-RULES:
-  1. ONE-SIDE VISIBILITY: A step is visible if ONE FULL SIDE of its required
-     body parts is visible.
-  2. FLOOR-POSE CHECK: If torso is upright (standing), refuse to score.
-  3. SINGLE-SIDE FEATURES: Geometry uses the more-visible side.
-  4. (NEW) Score-zero hiding: aggregated scores of 0 are flagged with
-     `hide_from_ui = True` and substituted with 50 in the running total.
+REFINED RULE for score-zero hiding:
+  - In aggregate_step_reports: hide_from_ui = not_visible_overall
+    (i.e., hide only if the body part was missing in most frames)
+  - In _single_frame_to_aggregated: propagate the hide_from_ui flag
+    that validate_pose() already set per step.
+  - A genuinely-bad pose where the body part WAS visible stays VISIBLE
+    in the UI with its raw score.
 """
 
 import cv2
@@ -372,8 +368,9 @@ def aggregate_step_reports(all_reports):
         most_common = max(set(issues_seen), key=issues_seen.count) if issues_seen else None
         nv_overall = nv_rate > 50
 
-        # NEW: hide step from UI if aggregated score is 0 (or essentially zero)
-        hide_from_ui = avg <= 0.0
+        # REFINED: hide step from UI ONLY if it was not_visible in most frames.
+        # Genuinely-bad scores stay visible.
+        hide_from_ui = nv_overall
 
         aggregated_steps.append({
             "step": i + 1, "name": name, "cue": cue, "weight": weight,
@@ -386,7 +383,7 @@ def aggregate_step_reports(all_reports):
     finals = [r["final_score"] for r in all_reports]
     final_score = max(0, min(100, int(round(sum(finals) / len(finals)))))
 
-    # Exclude hidden steps from the visible issues list
+    # Exclude hidden steps; visible-failing steps still surface their issue
     significant_issues = [s["issue"] for s in aggregated_steps
                           if s["issue"] and s["fail_rate_percent"] >= 25
                           and not s.get("hide_from_ui")]
@@ -398,6 +395,7 @@ def _single_frame_to_aggregated(report):
     aggregated_steps = []
     for s in report["steps"]:
         not_vis = s.get("not_visible", False)
+        # hide_from_ui flag was already set correctly by validate_pose()
         hide = s.get("hide_from_ui", False)
         aggregated_steps.append({
             "step": s["step"], "name": s["name"], "cue": s["cue"], "weight": s["weight"],
@@ -409,7 +407,6 @@ def _single_frame_to_aggregated(report):
             "issue": s["issue"],
             "passed_overall": s["passed"] and not not_vis,
         })
-    # Filter issues to exclude hidden steps
     issues = [s["issue"] for s in report["steps"]
               if s.get("issue") and not s.get("hide_from_ui")]
     return {"final_score": report["final_score"], "steps": aggregated_steps,
