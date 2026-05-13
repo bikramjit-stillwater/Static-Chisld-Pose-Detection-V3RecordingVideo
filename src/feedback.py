@@ -1,52 +1,84 @@
 """
-Feedback generation for Child's Pose.
-Uses Google Gemini if GEMINI_API_KEY is set; falls back to rule-based otherwise.
+Feedback for Child's Pose.
+
+New feedback structure:
+  - Summary (1 sentence)
+  - Areas Where You Did Well (2-3 lines)
+  - Areas to Improve (max 5)
+  - Motivation (1 sentence)
+
+Hidden steps (those with hide_from_ui=True) are excluded from the prompt
+so the coach doesn't comment on body parts the system couldn't evaluate.
 """
 
 import os
 
 
-def _build_step_summary(steps):
+def _visible_steps(steps):
+    """Return only steps that should be shown to the user (not hidden)."""
     if not steps:
-        return "  (no per-step data available)"
+        return []
+    return [s for s in steps if not s.get("hide_from_ui")]
+
+
+def _build_step_summary(steps):
+    visible = _visible_steps(steps)
+    if not visible:
+        return "  (no step data available)"
     lines = []
-    for s in steps:
-        if s.get("not_visible"):
-            lines.append(f"  Step {s['step']} - {s['name']}: NOT VISIBLE (cannot evaluate)")
-        else:
-            score = s.get("average_score", s.get("score", 0))
-            status = "PASS" if s.get("passed_overall", s.get("passed", False)) else "FAIL"
-            issue = s.get("issue") or "looks good"
-            lines.append(f"  Step {s['step']} - {s['name']}: {score}/100 [{status}] - {issue}")
+    for s in visible:
+        score = s.get("average_score", s.get("score", 0))
+        status = "PASS" if s.get("passed_overall", s.get("passed", False)) else "FAIL"
+        issue = s.get("issue") or "looks good"
+        lines.append(f"  Step {s['step']} - {s['name']}: {score}/100 [{status}] - {issue}")
     return "\n".join(lines)
 
 
 def get_rule_based_feedback(score, issues, steps=None):
-    lines = []
-    if score is None or score == 0:
-        lines.append("Could not evaluate your pose. Please re-record from the side with full body visible.")
-    elif score >= 85:
-        lines.append("Excellent! Your Child's Pose shows great relaxation and alignment.")
-    elif score >= 70:
-        lines.append("Good attempt. A few refinements will deepen your Child's Pose.")
-    elif score >= 50:
-        lines.append("Decent start. Focus on sinking hips to heels and lengthening spine and arms.")
-    elif score >= 30:
-        lines.append("Your pose needs work. Review the foundational shape - hips on heels, torso folded, arms extended.")
-    else:
-        lines.append("This does not look like Child's Pose yet. Begin from tabletop and slowly lower your hips back toward your heels.")
+    """Fallback when no Gemini key. Same two-section structure."""
+    visible = _visible_steps(steps)
 
-    if steps:
-        lines.append("")
-        lines.append("Step-by-step assessment:")
-        for s in steps:
-            if s.get("not_visible"):
-                lines.append(f"{s['step']}. {s['name']}: Not visible - cannot evaluate")
-            else:
-                status = "OK" if s.get("passed_overall", s.get("passed", False)) else "Needs work"
-                lines.append(f"{s['step']}. {s['name']}: {status}")
-                if s.get("issue"):
-                    lines.append(f"   -> {s['issue']}")
+    # Summary line
+    if score is None or score == 0:
+        summary = "Could not evaluate your pose. Please re-record from the side with full body visible."
+    elif score >= 85:
+        summary = "Excellent! Your Child's Pose shows great relaxation and alignment."
+    elif score >= 70:
+        summary = "Good attempt. A few refinements will deepen your Child's Pose."
+    elif score >= 50:
+        summary = "Decent start. Focus on sinking hips to heels and lengthening through your spine and arms."
+    elif score >= 30:
+        summary = "Your pose needs work. Review the foundational shape - hips on heels, torso folded, arms extended."
+    else:
+        summary = "This does not look like Child's Pose yet. Begin from tabletop and slowly lower your hips back."
+
+    # Separate passed (well done) and failed (improve)
+    well_done = [s for s in visible if s.get("passed_overall", s.get("passed", False))]
+    needs_work = [s for s in visible if not s.get("passed_overall", s.get("passed", False))]
+
+    lines = []
+    lines.append(f"Summary: {summary}")
+    lines.append("")
+
+    lines.append("Areas Where You Did Well:")
+    if well_done:
+        for s in well_done[:3]:
+            lines.append(f"- {s['name']}: solid alignment here.")
+    else:
+        lines.append("- Keep practicing - every attempt builds awareness of the pose.")
+    lines.append("")
+
+    lines.append("Areas to Improve:")
+    if needs_work:
+        for s in needs_work[:5]:
+            issue = s.get("issue") or s["cue"]
+            lines.append(f"- {s['name']}: {issue}")
+    else:
+        lines.append("- No major issues detected - just keep refining.")
+    lines.append("")
+
+    lines.append("Motivation: Stay patient with yourself - Child's Pose is a place to rest, not to strive.")
+
     return "\n".join(lines)
 
 
@@ -65,10 +97,9 @@ def get_gemini_feedback(score, issues, steps=None):
         prompt = f"""
 You are an honest, kind, knowledgeable yoga teacher.
 
-A student performed Child's Pose.
-Be HONEST - if the score is low, do not pretend the pose was good.
-If a body part was NOT VISIBLE in the frame, do NOT make up feedback about it.
-Simply note that you could not see that part and ask them to re-record.
+A student performed Child's Pose. Below is the step-by-step report,
+including ONLY the steps we could clearly evaluate. Be HONEST about the score -
+if it's low, do not pretend the pose was good.
 
 OVERALL SCORE: {score}/100
 
@@ -79,41 +110,40 @@ SCORING GUIDE:
   30-54   Poor - the pose is not Child's Pose yet
    0-29   Very poor - explicitly say it does not look like the pose
 
-STEP-BY-STEP REPORT:
+STEP-BY-STEP REPORT (only evaluable steps):
 {step_summary}
 
 KEY ISSUES OBSERVED:
 {issues_text}
 
-The 6 steps of Child's Pose are:
-  1. Hips on Heels - hips sink back to rest on heels
-  2. Torso Folded Forward - chest folds down toward thighs
-  3. Arms Extended Forward - arms reach out in front, elbows straight
-  4. Spine Lengthened - long elongation from hips through fingertips
-  5. Forehead Down - forehead resting on the mat (or a block)
-  6. Shoulders Relaxed - shoulders away from ears, no neck tension
-
-Now write feedback in EXACTLY this format:
+Write feedback in EXACTLY this format:
 
 Summary: <one honest sentence>
 
-Step-by-Step Feedback:
-1. Hips on Heels: <one short line>
-2. Torso Folded Forward: <one short line>
-3. Arms Extended Forward: <one short line>
-4. Spine Lengthened: <one short line>
-5. Forehead Down: <one short line>
-6. Shoulders Relaxed: <one short line>
+Areas Where You Did Well:
+- <observation 1 - reference a specific step that passed>
+- <observation 2 - another positive>
+- <optional third positive, only if there are at least 3 passing steps>
 
-Top 3 Priorities to Improve:
-1. <priority 1>
-2. <priority 2>
-3. <priority 3>
+Areas to Improve:
+- <improvement 1 - most important fix>
+- <improvement 2>
+- <improvement 3>
+- <improvement 4 - only if needed>
+- <improvement 5 - only if needed>
 
 Motivation: <one warm closing sentence>
 
-IMPORTANT: For any step marked NOT VISIBLE, say so honestly and do NOT include
-that step in the Top 3 Priorities.
+RULES:
+- "Areas Where You Did Well" must have 2-3 lines max.
+- "Areas to Improve" must have at most 5 lines (skip lines if fewer real issues).
+- Only reference steps that appear in the report (skip ones not listed).
+- Reference specific step names when possible (e.g. "Your Torso Folded Forward
+  looked great").
+- Match tone to the score band - NEVER call a sub-50 pose "good".
+- Keep each bullet short - one short sentence.
+- If no steps passed at all, write a single line under "Areas Where You Did Well"
+  acknowledging the effort and encouraging another try.
 """
         response = client.models.generate_content(
             model="gemini-2.5-flash",
