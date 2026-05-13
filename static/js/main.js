@@ -4,15 +4,17 @@
  *   - file selection previews
  *   - hooking up the Analyze button to POST /upload
  *   - loading overlay during analysis
+ *
+ * NEW: shows "Uploading..." state while the browser is reading the file,
+ *      so the user can't click Analyze until the file is fully ready.
  */
 (function () {
     'use strict';
 
-    // What the user has selected for analysis:
-    //   { type: 'video'|'photo', source: File|Blob, filename: string }
     let pending = null;
+    let isProcessingFile = false;  // true while file is being read
 
-    // ----- Tab switching ---------------------------------------------------
+    // Tab switching
     const tabButtons = document.querySelectorAll('.tab-btn');
     const tabPanels = document.querySelectorAll('.tab-panel');
 
@@ -24,7 +26,6 @@
                 p.classList.toggle('active', p.id === `tab-${target}`);
             });
 
-            // When switching away from the record tab, release the camera.
             if (target !== 'record-video' && window.PoseRecorder) {
                 window.PoseRecorder.reset();
             }
@@ -32,7 +33,7 @@
         });
     });
 
-    // ----- Upload Video tab -----------------------------------------------
+    // Upload Video tab
     const videoInput = document.getElementById('video-file');
     const videoPreview = document.getElementById('video-preview');
 
@@ -44,13 +45,30 @@
             updateAnalyzeButton();
             return;
         }
+
+        // Show "Uploading..." while the browser prepares the file
+        setUploadingState(true);
+        videoPreview.innerHTML = '<div class="upload-status">⏳ Preparing video... please wait</div>';
+
+        // Read the file - wait for the browser to fully load it before allowing Analyze
         const url = URL.createObjectURL(file);
-        videoPreview.innerHTML = `<video src="${url}" controls></video>`;
-        pending = { type: 'video', source: file, filename: file.name };
-        updateAnalyzeButton();
+        const tempVideo = document.createElement('video');
+        tempVideo.preload = 'metadata';
+        tempVideo.src = url;
+
+        tempVideo.onloadedmetadata = () => {
+            videoPreview.innerHTML = `<video src="${url}" controls></video>`;
+            pending = { type: 'video', source: file, filename: file.name };
+            setUploadingState(false);
+        };
+        tempVideo.onerror = () => {
+            videoPreview.innerHTML = '<div class="upload-status error">Could not read this video. Please try another file.</div>';
+            pending = null;
+            setUploadingState(false);
+        };
     });
 
-    // ----- Upload Photo tab -----------------------------------------------
+    // Upload Photo tab
     const photoInput = document.getElementById('photo-file');
     const photoPreview = document.getElementById('photo-preview');
 
@@ -62,13 +80,28 @@
             updateAnalyzeButton();
             return;
         }
+
+        // Show "Uploading..." while the browser reads the image
+        setUploadingState(true);
+        photoPreview.innerHTML = '<div class="upload-status">⏳ Preparing photo... please wait</div>';
+
         const url = URL.createObjectURL(file);
-        photoPreview.innerHTML = `<img src="${url}" alt="Selected photo">`;
-        pending = { type: 'photo', source: file, filename: file.name };
-        updateAnalyzeButton();
+        const tempImg = new Image();
+        tempImg.src = url;
+
+        tempImg.onload = () => {
+            photoPreview.innerHTML = `<img src="${url}" alt="Selected photo">`;
+            pending = { type: 'photo', source: file, filename: file.name };
+            setUploadingState(false);
+        };
+        tempImg.onerror = () => {
+            photoPreview.innerHTML = '<div class="upload-status error">Could not read this photo. Please try another file.</div>';
+            pending = null;
+            setUploadingState(false);
+        };
     });
 
-    // ----- Record Video tab -----------------------------------------------
+    // Record Video tab
     document.getElementById('btn-start-camera')
         .addEventListener('click', () => window.PoseRecorder.startCamera());
     document.getElementById('btn-start-record')
@@ -78,29 +111,50 @@
     document.getElementById('btn-discard')
         .addEventListener('click', () => window.PoseRecorder.reset());
 
+    // When user stops recording, mark as Uploading until blob is fully ready
+    document.addEventListener('recording-stopping', () => {
+        setUploadingState(true);
+    });
     document.addEventListener('recording-ready', (e) => {
         const blob = e.detail.blob;
         const mime = e.detail.mimeType;
         const ext = mime.includes('mp4') ? 'mp4' : 'webm';
         pending = { type: 'video', source: blob, filename: `recording.${ext}` };
-        updateAnalyzeButton();
+        setUploadingState(false);
     });
     document.addEventListener('recording-cleared', () => {
         if (pending && pending.source instanceof Blob && !(pending.source instanceof File)) {
             pending = null;
         }
+        setUploadingState(false);
         updateAnalyzeButton();
     });
 
-    // ----- Analyze button -------------------------------------------------
+    // Analyze button
     const analyzeBtn = document.getElementById('btn-analyze');
+    const originalAnalyzeText = analyzeBtn.textContent;
+
+    function setUploadingState(uploading) {
+        isProcessingFile = uploading;
+        if (uploading) {
+            analyzeBtn.disabled = true;
+            analyzeBtn.textContent = '⏳ Uploading... please wait';
+        } else {
+            analyzeBtn.textContent = originalAnalyzeText;
+            updateAnalyzeButton();
+        }
+    }
 
     function updateAnalyzeButton() {
+        if (isProcessingFile) {
+            analyzeBtn.disabled = true;
+            return;
+        }
         analyzeBtn.disabled = !pending;
     }
 
     analyzeBtn.addEventListener('click', async () => {
-        if (!pending) return;
+        if (!pending || isProcessingFile) return;
         showLoading(true);
         try {
             const formData = new FormData();
@@ -139,6 +193,5 @@
             .classList.toggle('active', !!show);
     }
 
-    // Initialize button state
     updateAnalyzeButton();
 })();
