@@ -1,13 +1,13 @@
 """
 Feedback for Child's Pose.
 
-New feedback structure:
-  - Summary (1 sentence)
+Output structure (no "Summary:" or "Motivation:" labels - just plain sentences):
+  - Opening sentence
   - Areas Where You Did Well (2-3 lines)
   - Areas to Improve (max 5)
-  - Motivation (1 sentence)
+  - Closing sentence
 
-Hidden steps (those with hide_from_ui=True) are excluded from the prompt
+Hidden steps (hide_from_ui=True) are excluded from the prompt entirely,
 so the coach doesn't comment on body parts the system couldn't evaluate.
 """
 
@@ -22,6 +22,7 @@ def _visible_steps(steps):
 
 
 def _build_step_summary(steps):
+    """Build the step list shown to Gemini - only evaluable steps."""
     visible = _visible_steps(steps)
     if not visible:
         return "  (no step data available)"
@@ -35,29 +36,28 @@ def _build_step_summary(steps):
 
 
 def get_rule_based_feedback(score, issues, steps=None):
-    """Fallback when no Gemini key. Same two-section structure."""
+    """Fallback when no Gemini key or API call fails. No Summary:/Motivation: labels."""
     visible = _visible_steps(steps)
 
-    # Summary line
+    # Opening sentence (no "Summary:" label)
     if score is None or score == 0:
-        summary = "Could not evaluate your pose. Please re-record from the side with full body visible."
+        opening = "Could not evaluate your pose. Please re-record from the side with full body visible."
     elif score >= 85:
-        summary = "Excellent! Your Child's Pose shows great relaxation and alignment."
+        opening = "Excellent! Your Child's Pose shows great relaxation and alignment."
     elif score >= 70:
-        summary = "Good attempt. A few refinements will deepen your Child's Pose."
+        opening = "Good attempt. A few refinements will deepen your Child's Pose."
     elif score >= 50:
-        summary = "Decent start. Focus on sinking hips to heels and lengthening through your spine and arms."
+        opening = "Decent start. Focus on sinking hips to heels and lengthening through your spine and arms."
     elif score >= 30:
-        summary = "Your pose needs work. Review the foundational shape - hips on heels, torso folded, arms extended."
+        opening = "Your pose needs work. Review the foundational shape - hips on heels, torso folded, arms extended."
     else:
-        summary = "This does not look like Child's Pose yet. Begin from tabletop and slowly lower your hips back."
+        opening = "This does not look like Child's Pose yet. Begin from tabletop and slowly lower your hips back."
 
-    # Separate passed (well done) and failed (improve)
     well_done = [s for s in visible if s.get("passed_overall", s.get("passed", False))]
     needs_work = [s for s in visible if not s.get("passed_overall", s.get("passed", False))]
 
     lines = []
-    lines.append(f"Summary: {summary}")
+    lines.append(opening)
     lines.append("")
 
     lines.append("Areas Where You Did Well:")
@@ -77,12 +77,14 @@ def get_rule_based_feedback(score, issues, steps=None):
         lines.append("- No major issues detected - just keep refining.")
     lines.append("")
 
-    lines.append("Motivation: Stay patient with yourself - Child's Pose is a place to rest, not to strive.")
+    # Closing sentence (no "Motivation:" label)
+    lines.append("Stay patient with yourself - Child's Pose is a place to rest, not to strive.")
 
     return "\n".join(lines)
 
 
 def get_gemini_feedback(score, issues, steps=None):
+    """Generate coaching feedback via Gemini. Falls back to rule-based on failure."""
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         return get_rule_based_feedback(score, issues, steps)
@@ -116,9 +118,10 @@ STEP-BY-STEP REPORT (only evaluable steps):
 KEY ISSUES OBSERVED:
 {issues_text}
 
-Write feedback in EXACTLY this format:
+Write feedback in EXACTLY this format. DO NOT include the words "Summary:"
+or "Motivation:" or any label prefix. Output the sentences directly.
 
-Summary: <one honest sentence>
+<one honest opening sentence matching the score - no label prefix>
 
 Areas Where You Did Well:
 - <observation 1 - reference a specific step that passed>
@@ -132,23 +135,34 @@ Areas to Improve:
 - <improvement 4 - only if needed>
 - <improvement 5 - only if needed>
 
-Motivation: <one warm closing sentence>
+<one warm closing sentence - no label prefix>
 
-RULES:
+CRITICAL RULES:
+- DO NOT write "Summary:" before the opening sentence. Just write the sentence.
+- DO NOT write "Motivation:" before the closing sentence. Just write the sentence.
 - "Areas Where You Did Well" must have 2-3 lines max.
 - "Areas to Improve" must have at most 5 lines (skip lines if fewer real issues).
 - Only reference steps that appear in the report (skip ones not listed).
-- Reference specific step names when possible (e.g. "Your Torso Folded Forward
-  looked great").
+- Reference specific step names when possible.
 - Match tone to the score band - NEVER call a sub-50 pose "good".
 - Keep each bullet short - one short sentence.
-- If no steps passed at all, write a single line under "Areas Where You Did Well"
-  acknowledging the effort and encouraging another try.
 """
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt,
         )
-        return response.text.strip()
+        text = response.text.strip()
+
+        # Safety net: strip leading labels if Gemini still includes them
+        lines = text.split("\n")
+        cleaned = []
+        for line in lines:
+            stripped = line.strip()
+            for label in ("Summary:", "Motivation:", "summary:", "motivation:"):
+                if stripped.startswith(label):
+                    line = line.replace(label, "", 1).lstrip()
+                    break
+            cleaned.append(line)
+        return "\n".join(cleaned).strip()
     except Exception:
         return get_rule_based_feedback(score, issues, steps)
