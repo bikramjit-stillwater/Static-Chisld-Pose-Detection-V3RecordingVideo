@@ -6,10 +6,12 @@ Two entry points:
   - analyze_image(path)  : process a single photo
 
 RULES:
-  1. ONE-SIDE VISIBILITY: Child's Pose is recorded from the side. A step is
-     visible if ONE FULL SIDE of its required body parts is visible.
+  1. ONE-SIDE VISIBILITY: A step is visible if ONE FULL SIDE of its required
+     body parts is visible.
   2. FLOOR-POSE CHECK: If torso is upright (standing), refuse to score.
-  3. SINGLE-SIDE FEATURES: Geometry uses the more-visible side, never midpoints.
+  3. SINGLE-SIDE FEATURES: Geometry uses the more-visible side.
+  4. (NEW) Score-zero hiding: aggregated scores of 0 are flagged with
+     `hide_from_ui = True` and substituted with 50 in the running total.
 """
 
 import cv2
@@ -369,17 +371,25 @@ def aggregate_step_reports(all_reports):
         nv_rate = round(not_visible_count / len(all_reports) * 100, 1)
         most_common = max(set(issues_seen), key=issues_seen.count) if issues_seen else None
         nv_overall = nv_rate > 50
+
+        # NEW: hide step from UI if aggregated score is 0 (or essentially zero)
+        hide_from_ui = avg <= 0.0
+
         aggregated_steps.append({
             "step": i + 1, "name": name, "cue": cue, "weight": weight,
             "average_score": avg, "fail_rate_percent": fail_rate,
             "not_visible_rate_percent": nv_rate, "not_visible": nv_overall,
+            "hide_from_ui": hide_from_ui,
             "issue": most_common,
             "passed_overall": fail_rate < 25 and not nv_overall,
         })
     finals = [r["final_score"] for r in all_reports]
     final_score = max(0, min(100, int(round(sum(finals) / len(finals)))))
+
+    # Exclude hidden steps from the visible issues list
     significant_issues = [s["issue"] for s in aggregated_steps
-                          if s["issue"] and s["fail_rate_percent"] >= 25]
+                          if s["issue"] and s["fail_rate_percent"] >= 25
+                          and not s.get("hide_from_ui")]
     return {"final_score": final_score, "steps": aggregated_steps,
             "issues": significant_issues}
 
@@ -388,17 +398,22 @@ def _single_frame_to_aggregated(report):
     aggregated_steps = []
     for s in report["steps"]:
         not_vis = s.get("not_visible", False)
+        hide = s.get("hide_from_ui", False)
         aggregated_steps.append({
             "step": s["step"], "name": s["name"], "cue": s["cue"], "weight": s["weight"],
             "average_score": round(s["score"], 1),
             "fail_rate_percent": 0.0 if s["passed"] else 100.0,
             "not_visible_rate_percent": 100.0 if not_vis else 0.0,
             "not_visible": not_vis,
+            "hide_from_ui": hide,
             "issue": s["issue"],
             "passed_overall": s["passed"] and not not_vis,
         })
+    # Filter issues to exclude hidden steps
+    issues = [s["issue"] for s in report["steps"]
+              if s.get("issue") and not s.get("hide_from_ui")]
     return {"final_score": report["final_score"], "steps": aggregated_steps,
-            "issues": report["issues"]}
+            "issues": issues}
 
 
 def analyze_video(video_path, save_frames_dir=None):
