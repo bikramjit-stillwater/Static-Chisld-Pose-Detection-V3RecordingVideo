@@ -81,7 +81,6 @@
     </div>
 
     {% if result.steps %}
-    {# Count visible steps (those NOT hidden from UI) #}
     {% set visible_count = result.steps | rejectattr('hide_from_ui') | list | length %}
     {% if visible_count > 0 %}
     <h2>Step-by-Step Breakdown</h2>
@@ -89,7 +88,6 @@
 
     <div class="step-grid">
         {% for s in result.steps %}
-            {# NEW: skip steps that are flagged hide_from_ui (score = 0) #}
             {% if not s.hide_from_ui %}
                 {% set step_key = 'step_' ~ s.step %}
                 {% set img = result.step_image_urls.get(step_key) %}
@@ -132,7 +130,6 @@
     {% endif %}
 
     <h2>Coach's Feedback</h2>
-    <div class="feedback-caption">Generated based on your step-by-step report.</div>
     <div class="feedback-box">{{ result.feedback }}</div>
 
 {% endif %}
