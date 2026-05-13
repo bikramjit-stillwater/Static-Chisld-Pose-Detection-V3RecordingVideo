@@ -3,23 +3,19 @@ Child's Pose validator.
 
 Visibility rule:
   If a body part required for a step is NOT VISIBLE, that step scores 0
-  with a clear "not visible" message. The 0 is included in the weighted
-  average (penalizes missing body parts).
+  with a clear "not visible" message.
 
-Target pose: kneeling forward fold with arms extended out in front, palms down,
-forehead resting on the mat, hips on heels, spine lengthened.
-
-6 ground-truth scoring steps, each 0-100 with quadratic curves.
+NEW (Score-zero hiding):
+  Any step whose score == 0 is marked with `hide_from_ui = True` so the UI
+  can skip rendering that card. In the FINAL score calculation, those zero
+  scores are replaced with 50 (neutral), so a single zero does not crater
+  the total.
 """
 
 import math
 
 
-# -----------------------------------------------------------------------------
-# Geometry helpers
-# -----------------------------------------------------------------------------
 def calculate_angle(a, b, c):
-    """Angle at point b formed by points a-b-c, in degrees."""
     ba = (a[0] - b[0], a[1] - b[1])
     bc = (c[0] - b[0], c[1] - b[1])
     dot = ba[0] * bc[0] + ba[1] * bc[1]
@@ -32,7 +28,6 @@ def calculate_angle(a, b, c):
 
 
 def score_value(deviation, ideal_max, fail_min, curve="quadratic"):
-    """Convert deviation into 0-100 score."""
     if deviation <= ideal_max:
         return 100.0
     if deviation >= fail_min:
@@ -55,14 +50,10 @@ def _not_visible(step_num, name, body_part, cue):
     }
 
 
-# =============================================================================
-# Step 1 - Hips on Heels
-# =============================================================================
 def check_hips_on_heels(features, visible=True):
     if not visible:
         return _not_visible(1, "Hips on Heels", "hips/legs",
                             "Lower your hips back toward your heels")
-
     ratio = features["hip_to_heel_ratio"]
     score = score_value(ratio, 0.25, 1.20, "quadratic")
     passed = ratio <= 0.45
@@ -76,14 +67,10 @@ def check_hips_on_heels(features, visible=True):
     }
 
 
-# =============================================================================
-# Step 2 - Torso Folded Forward
-# =============================================================================
 def check_torso_fold(features, visible=True):
     if not visible:
         return _not_visible(2, "Torso Folded Forward", "torso (shoulders, hips, knees)",
                             "Fold your chest down toward the floor")
-
     angle = features["torso_thigh_angle"]
     score = score_value(angle - 10.0, 15.0, 80.0, "quadratic")
     passed = angle <= 35.0
@@ -97,14 +84,10 @@ def check_torso_fold(features, visible=True):
     }
 
 
-# =============================================================================
-# Step 3 - Arms Extended Forward
-# =============================================================================
 def check_arms_extended(features, visible=True):
     if not visible:
         return _not_visible(3, "Arms Extended Forward", "arms (shoulders, elbows, wrists)",
                             "Stretch your arms out in front, palms down")
-
     e_left = features["left_elbow_angle"]
     e_right = features["right_elbow_angle"]
     worst_elbow = min(e_left, e_right)
@@ -146,14 +129,10 @@ def check_arms_extended(features, visible=True):
     }
 
 
-# =============================================================================
-# Step 4 - Spine Lengthened
-# =============================================================================
 def check_spine_lengthened(features, visible=True):
     if not visible:
         return _not_visible(4, "Spine Lengthened", "spine line (hips, shoulders, wrists)",
                             "Lengthen the spine - reach fingertips forward, sit hips back")
-
     deviation = features["spine_line_deviation"]
     score = score_value(deviation, 15.0, 70.0, "quadratic")
     passed = deviation <= 30.0
@@ -167,14 +146,10 @@ def check_spine_lengthened(features, visible=True):
     }
 
 
-# =============================================================================
-# Step 5 - Forehead Down
-# =============================================================================
 def check_forehead_down(features, visible=True):
     if not visible:
         return _not_visible(5, "Forehead Down", "head and arms",
                             "Rest your forehead on the mat, or on a block if needed")
-
     head_lift = features["head_lift_above_mat"]
     score = score_value(head_lift, 0.05, 0.40, "quadratic")
     passed = head_lift <= 0.12
@@ -188,18 +163,11 @@ def check_forehead_down(features, visible=True):
     }
 
 
-# =============================================================================
-# Step 6 - Shoulders Relaxed (with realistic thresholds for folded poses)
-# =============================================================================
 def check_shoulders_relaxed(features, visible=True):
     if not visible:
         return _not_visible(6, "Shoulders Relaxed", "shoulders and ears",
                             "Relax your shoulders away from your ears")
-
-    # In a folded-forward pose, the head tilts forward and the ear is naturally
-    # near shoulder height. So a small drop is NORMAL, not a problem.
     drop = features["shoulder_ear_drop"]
-
     if drop >= 0.04:
         score = 100.0
     elif drop >= -0.04:
@@ -225,7 +193,6 @@ STEP_WEIGHTS = {1: 0.20, 2: 0.25, 3: 0.20, 4: 0.15, 5: 0.10, 6: 0.10}
 
 
 def validate_pose(features, step_visibility=None):
-    """Run 6-step validation for Child's Pose with compound penalties."""
     if step_visibility is None:
         step_visibility = {i: True for i in range(1, 7)}
 
@@ -238,14 +205,26 @@ def validate_pose(features, step_visibility=None):
         check_shoulders_relaxed(features, step_visibility.get(6, True)),
     ]
 
+    # NEW LOGIC: Mark zero-score steps to hide from UI, substitute 50 in formula.
+    # This prevents a single "0" (whether from a hidden body part or a genuinely
+    # bad rep) from cratering the final score. The UI skips these cards entirely.
+    for s in step_results:
+        if s["score"] == 0.0:
+            s["hide_from_ui"] = True
+            s["effective_score"] = 50.0
+        else:
+            s["hide_from_ui"] = False
+            s["effective_score"] = s["score"]
+
+    # Final-score formula uses effective_score (50 for hidden steps)
     base_score = 0.0
     for s in step_results:
         s["weight"] = STEP_WEIGHTS[s["step"]]
-        base_score += s["score"] * s["weight"]
+        base_score += s["effective_score"] * s["weight"]
 
-    worst = min(s["score"] for s in step_results)
-    very_bad = sum(1 for s in step_results if s["score"] < 20)
-    critical = sum(1 for s in step_results if s["score"] < 40)
+    worst = min(s["effective_score"] for s in step_results)
+    very_bad = sum(1 for s in step_results if s["effective_score"] < 20)
+    critical = sum(1 for s in step_results if s["effective_score"] < 40)
 
     final_score = base_score
     if very_bad >= 2:
@@ -265,7 +244,9 @@ def validate_pose(features, step_visibility=None):
     final_score = int(round(final_score))
     final_score = max(0, min(100, final_score))
 
-    issues = [s["issue"] for s in step_results if s["issue"]]
+    # Don't include hidden steps in the visible issues list
+    issues = [s["issue"] for s in step_results
+              if s["issue"] and not s.get("hide_from_ui")]
 
     return {
         "final_score": final_score,
