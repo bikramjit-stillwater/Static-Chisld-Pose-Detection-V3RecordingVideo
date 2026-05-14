@@ -1,13 +1,13 @@
 """
 Pose analyzer for Child's Pose - one-side visibility rule.
 
-REFINED RULE for score-zero hiding:
-  - In aggregate_step_reports: hide_from_ui = not_visible_overall
-    (i.e., hide only if the body part was missing in most frames)
-  - In _single_frame_to_aggregated: propagate the hide_from_ui flag
-    that validate_pose() already set per step.
-  - A genuinely-bad pose where the body part WAS visible stays VISIBLE
-    in the UI with its raw score.
+REFINED RULES:
+  - Hide step cards in UI only if the body part was not_visible in most frames.
+  - NEW (bug fix): "Cannot evaluate - X not visible" messages NEVER show in
+    Top Issues panel. They're filtered at two levels (when collecting issues
+    per-frame, and at the final issues output).
+  - A genuinely-bad pose where the body part WAS visible stays VISIBLE in UI
+    with its raw score and its real issue message.
 """
 
 import cv2
@@ -19,6 +19,12 @@ from src.scorer import calculate_angle, validate_pose
 MIN_QUALITY_SCORE = 50
 VISIBILITY_THRESHOLD = 0.5
 MIN_TORSO_TILT_FOR_FLOOR_POSE = 30.0
+
+
+def _is_not_visible_issue(issue_text):
+    """True if this issue is a 'Cannot evaluate - X not visible' message."""
+    return bool(issue_text) and issue_text.startswith("Cannot evaluate")
+
 
 POSE_LANDMARKS = {
     "nose": 0,
@@ -361,15 +367,17 @@ def aggregate_step_reports(all_reports):
             cue = s["cue"]; name = s["name"]; weight = s["weight"]
             if not s["passed"]: fails += 1
             if s.get("not_visible"): not_visible_count += 1
-            if s["issue"]: issues_seen.append(s["issue"])
+            # FIX: only collect issues from frames where the body part WAS visible.
+            # Skip "Cannot evaluate" / not_visible frame issues so they can't bubble up.
+            if s["issue"] and not s.get("not_visible") and not _is_not_visible_issue(s["issue"]):
+                issues_seen.append(s["issue"])
+
         avg = round(sum(scores) / len(scores), 1)
         fail_rate = round(fails / len(all_reports) * 100, 1)
         nv_rate = round(not_visible_count / len(all_reports) * 100, 1)
         most_common = max(set(issues_seen), key=issues_seen.count) if issues_seen else None
         nv_overall = nv_rate > 50
 
-        # REFINED: hide step from UI ONLY if it was not_visible in most frames.
-        # Genuinely-bad scores stay visible.
         hide_from_ui = nv_overall
 
         aggregated_steps.append({
@@ -383,10 +391,13 @@ def aggregate_step_reports(all_reports):
     finals = [r["final_score"] for r in all_reports]
     final_score = max(0, min(100, int(round(sum(finals) / len(finals)))))
 
-    # Exclude hidden steps; visible-failing steps still surface their issue
+    # SAFETY NET: also exclude any "Cannot evaluate" strings explicitly,
+    # in case anything sneaks through.
     significant_issues = [s["issue"] for s in aggregated_steps
-                          if s["issue"] and s["fail_rate_percent"] >= 25
-                          and not s.get("hide_from_ui")]
+                          if s["issue"]
+                          and s["fail_rate_percent"] >= 25
+                          and not s.get("hide_from_ui")
+                          and not _is_not_visible_issue(s["issue"])]
     return {"final_score": final_score, "steps": aggregated_steps,
             "issues": significant_issues}
 
@@ -395,7 +406,6 @@ def _single_frame_to_aggregated(report):
     aggregated_steps = []
     for s in report["steps"]:
         not_vis = s.get("not_visible", False)
-        # hide_from_ui flag was already set correctly by validate_pose()
         hide = s.get("hide_from_ui", False)
         aggregated_steps.append({
             "step": s["step"], "name": s["name"], "cue": s["cue"], "weight": s["weight"],
@@ -407,8 +417,11 @@ def _single_frame_to_aggregated(report):
             "issue": s["issue"],
             "passed_overall": s["passed"] and not not_vis,
         })
+    # FIX + SAFETY NET: exclude hidden steps AND any "Cannot evaluate" strings
     issues = [s["issue"] for s in report["steps"]
-              if s.get("issue") and not s.get("hide_from_ui")]
+              if s.get("issue")
+              and not s.get("hide_from_ui")
+              and not _is_not_visible_issue(s["issue"])]
     return {"final_score": report["final_score"], "steps": aggregated_steps,
             "issues": issues}
 
