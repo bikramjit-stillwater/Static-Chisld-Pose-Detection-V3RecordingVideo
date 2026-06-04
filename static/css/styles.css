@@ -1,5 +1,6 @@
 /* ============================================================
-   Child's Pose Analysis - Dark theme stylesheet
+   Pose Analysis - Dark theme stylesheet (COMPLETE FILE)
+   Works for both Childs Pose and Tadasana apps - identical file.
    ============================================================ */
 
 * {
@@ -24,12 +25,21 @@ body {
 }
 
 /* ============================================================
-   Headings
+   Page header - title on left, action buttons on right
    ============================================================ */
 .page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
     margin-bottom: 1.5rem;
     padding-bottom: 1rem;
     border-bottom: 2px solid #334155;
+    flex-wrap: wrap;
+}
+.header-content {
+    flex: 1;
+    min-width: 250px;
 }
 .page-header h1 {
     font-size: 1.75rem;
@@ -42,6 +52,13 @@ body {
     font-size: 0.875rem;
     color: #cbd5e1;
     margin-top: 0.35rem;
+}
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
+    padding-top: 0.25rem;
 }
 
 h2 {
@@ -60,9 +77,10 @@ h3 {
 }
 
 /* ============================================================
-   Side-view banner
+   How-to-capture banner (hidden by default, shown via info button)
    ============================================================ */
 .side-view-banner {
+    display: none;
     background: linear-gradient(135deg, #1e40af 0%, #2563eb 100%);
     border-radius: 12px;
     padding: 1rem 1.25rem;
@@ -70,6 +88,9 @@ h3 {
     color: white;
     box-shadow: 0 4px 14px rgba(37,99,235,0.25);
     border: 1px solid #3b82f6;
+}
+.side-view-banner.show {
+    display: block;
 }
 .side-view-banner .label {
     font-size: 0.7rem;
@@ -99,19 +120,139 @@ h3 {
 }
 
 /* ============================================================
-   Tabs
+   Info button (i icon) - in page header right side
    ============================================================ */
-.tab-nav {
+.info-btn {
+    background: #1e293b;
+    color: #cbd5e1;
+    border: 1px solid #334155;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    font-weight: 700;
+    font-family: Georgia, "Times New Roman", serif;
+    font-style: italic;
+    transition: all 0.15s ease;
+    padding: 0;
+    flex-shrink: 0;
+}
+.info-btn:hover {
+    background: #334155;
+    color: white;
+    border-color: #475569;
+    transform: scale(1.05);
+}
+.info-btn.active {
+    background: #2563eb;
+    color: white;
+    border-color: #2563eb;
+}
+.info-btn .info-icon {
+    display: block;
+    line-height: 1;
+}
+
+/* ============================================================
+   Upload dropdown (in page header right side)
+   ============================================================ */
+.upload-dropdown {
+    position: relative;
+    display: inline-block;
+}
+.dropdown-toggle {
+    background: #1e293b;
+    color: #cbd5e1;
+    border: 1px solid #334155;
+    padding: 0.6rem 1rem;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 600;
+    transition: all 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+.dropdown-toggle:hover {
+    background: #334155;
+    color: white;
+}
+.dropdown-toggle.active {
+    background: #2563eb;
+    color: white;
+    border-color: #2563eb;
+}
+.dropdown-caret {
+    font-size: 0.7rem;
+    opacity: 0.85;
+}
+
+/* Dropdown menu */
+.upload-options {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 0.4rem;
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+    z-index: 100;
+    min-width: 200px;
+    overflow: hidden;
+    padding: 0.3rem;
+}
+.upload-options.show {
+    display: block;
+}
+.upload-options .dropdown-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    color: #cbd5e1;
+    border: none;
+    padding: 0.65rem 0.85rem;
+    cursor: pointer;
+    font-size: 0.875rem;
+    font-weight: 500;
+    transition: all 0.12s ease;
+    border-radius: 6px;
+    margin: 0;
+}
+.upload-options .dropdown-item:hover {
+    background: #334155;
+    color: white;
+    transform: none;
+}
+.upload-options .dropdown-item.active {
+    background: rgba(37, 99, 235, 0.25);
+    color: white;
+}
+
+/* ============================================================
+   Capture selector (only Record Video button now)
+   ============================================================ */
+.capture-selector {
     display: flex;
     gap: 0.5rem;
     margin-bottom: 1rem;
     flex-wrap: wrap;
+    align-items: center;
 }
+
+/* Tab buttons base (Record Video + dropdown items) */
 .tab-btn {
     background: #1e293b;
     color: #cbd5e1;
     border: 1px solid #334155;
-    padding: 0.7rem 1.2rem;
+    padding: 0.7rem 1.4rem;
     border-radius: 8px;
     cursor: pointer;
     font-size: 0.9rem;
@@ -128,6 +269,9 @@ h3 {
     border-color: #2563eb;
 }
 
+/* ============================================================
+   Tab panels (only the active one is visible - CRITICAL)
+   ============================================================ */
 .tab-panel {
     display: none;
     background: #1e293b;
@@ -182,6 +326,23 @@ h3 {
     max-height: 360px;
     border-radius: 8px;
     object-fit: contain;
+}
+
+/* Upload status (the "Preparing..." message) */
+.upload-status {
+    background: rgba(37, 99, 235, 0.15);
+    border: 1px dashed #3b82f6;
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    color: #bfdbfe;
+    font-size: 0.9rem;
+    text-align: center;
+    margin-top: 0.5rem;
+}
+.upload-status.error {
+    background: rgba(239, 68, 68, 0.15);
+    border-color: #ef4444;
+    color: #fecaca;
 }
 
 /* ============================================================
@@ -244,27 +405,12 @@ h3 {
     opacity: 0.4;
     cursor: not-allowed;
 }
-.record-btn.primary {
-    background: #2563eb;
-    color: white;
-}
-.record-btn.primary:hover:not(:disabled) {
-    background: #1d4ed8;
-}
-.record-btn.record {
-    background: #dc2626;
-    color: white;
-}
-.record-btn.record:hover:not(:disabled) {
-    background: #b91c1c;
-}
-.record-btn.stop {
-    background: #475569;
-    color: white;
-}
-.record-btn.stop:hover:not(:disabled) {
-    background: #64748b;
-}
+.record-btn.primary { background: #2563eb; color: white; }
+.record-btn.primary:hover:not(:disabled) { background: #1d4ed8; }
+.record-btn.record { background: #dc2626; color: white; }
+.record-btn.record:hover:not(:disabled) { background: #b91c1c; }
+.record-btn.stop { background: #475569; color: white; }
+.record-btn.stop:hover:not(:disabled) { background: #64748b; }
 .record-btn.ghost {
     background: transparent;
     color: #94a3b8;
@@ -279,7 +425,7 @@ h3 {
 }
 
 /* ============================================================
-   Action buttons
+   Action buttons (Analyze, back, etc.)
    ============================================================ */
 .action-row {
     margin-top: 1.5rem;
@@ -370,7 +516,7 @@ h3 {
 }
 
 /* ============================================================
-   Banners
+   Result banners
    ============================================================ */
 .error-banner {
     background: rgba(239,68,68,0.15);
@@ -542,7 +688,7 @@ h3 {
 }
 
 /* ============================================================
-   Step cards
+   Step cards (results grid)
    ============================================================ */
 .step-caption {
     font-size: 0.78rem;
@@ -678,7 +824,7 @@ h3 {
 .step-cue strong { font-style: normal; color: white; }
 
 /* ============================================================
-   Feedback box
+   Coach feedback box
    ============================================================ */
 .feedback-caption {
     font-size: 0.78rem;
@@ -697,23 +843,12 @@ h3 {
 }
 
 /* ============================================================
-   ADD THESE STYLES TO THE END OF YOUR EXISTING styles.css
-   (works for both Childs Pose and Tadasana - same dark theme)
+   Mobile responsiveness
    ============================================================ */
- 
-.upload-status {
-    background: rgba(37, 99, 235, 0.15);
-    border: 1px dashed #3b82f6;
-    border-radius: 8px;
-    padding: 1rem 1.25rem;
-    color: #bfdbfe;
-    font-size: 0.9rem;
-    text-align: center;
-    margin-top: 0.5rem;
-}
- 
-.upload-status.error {
-    background: rgba(239, 68, 68, 0.15);
-    border-color: #ef4444;
-    color: #fecaca;
+@media (max-width: 600px) {
+    .container { padding: 1rem; }
+    .page-header h1 { font-size: 1.4rem; }
+    .page-header .subtitle { font-size: 0.8rem; }
+    .header-actions { width: 100%; justify-content: flex-end; }
+    .dropdown-toggle { padding: 0.5rem 0.85rem; font-size: 0.8rem; }
 }
