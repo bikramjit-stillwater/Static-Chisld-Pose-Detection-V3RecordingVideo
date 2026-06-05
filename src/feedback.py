@@ -1,168 +1,204 @@
 """
-Feedback for Child's Pose.
+Coach's feedback generator for Child's Pose via OpenRouter (Claude Sonnet 4.5).
 
-Output structure (no "Summary:" or "Motivation:" labels - just plain sentences):
-  - Opening sentence
-  - Areas Where You Did Well (2-3 lines)
-  - Areas to Improve (max 5)
-  - Closing sentence
+FLEXIBLE SIGNATURE:
+  Accepts BOTH calling styles to match any existing app.py:
+    generate_feedback(result_dict)
+    generate_feedback(steps=[...], final_score=N, ...)
+    generate_feedback(steps=[...], score=N, ...)
+    get_gemini_feedback(...)  - same thing, backwards-compat alias
 
-Hidden steps (hide_from_ui=True) are excluded from the prompt entirely,
-so the coach doesn't comment on body parts the system couldn't evaluate.
+Env vars:
+  OPENROUTER_API_KEY  - required
+  OPENROUTER_MODEL    - optional, defaults to 'anthropic/claude-sonnet-4.5'
 """
 
 import os
+import json
+import urllib.request
+import urllib.error
+
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "anthropic/claude-sonnet-4.5").strip()
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+
+def _normalize_input(*args, **kwargs):
+    """
+    Accept any of these calling styles and return a unified result dict:
+        generate_feedback({'steps':..., 'final_score':...})
+        generate_feedback(steps=..., final_score=...)
+        generate_feedback(steps=..., score=...)
+        generate_feedback(steps=..., final_score=..., issues=..., mode=...)
+    """
+    result = {}
+    if args:
+        if isinstance(args[0], dict):
+            result.update(args[0])
+    result.update(kwargs)
+
+    if "final_score" not in result and "score" in result:
+        result["final_score"] = result["score"]
+    if "final_score" not in result:
+        result["final_score"] = 0
+    if "steps" not in result:
+        result["steps"] = []
+    return result
 
 
 def _visible_steps(steps):
-    """Return only steps that should be shown to the user (not hidden)."""
-    if not steps:
-        return []
-    return [s for s in steps if not s.get("hide_from_ui")]
+    return [s for s in (steps or []) if not s.get("hide_from_ui")]
 
 
-def _build_step_summary(steps):
-    """Build the step list shown to Gemini - only evaluable steps."""
-    visible = _visible_steps(steps)
-    if not visible:
-        return "  (no step data available)"
+def _build_prompt(result):
+    visible = _visible_steps(result.get("steps", []))
+    final_score = result.get("final_score", 0)
+
     lines = []
     for s in visible:
         score = s.get("average_score", s.get("score", 0))
-        status = "PASS" if s.get("passed_overall", s.get("passed", False)) else "FAIL"
-        issue = s.get("issue") or "looks good"
-        lines.append(f"  Step {s['step']} - {s['name']}: {score}/100 [{status}] - {issue}")
-    return "\n".join(lines)
+        status = "Passed" if score >= 50 else "Needs improvement"
+        issue = s.get("issue") or "no issues"
+        lines.append(
+            f"Step {s.get('step', '?')}: {s.get('name', 'Step')} - Score: {score}/100 - "
+            f"{status} - Issue: {issue} - Cue: {s.get('cue', '')}"
+        )
+    steps_text = "\n".join(lines) if lines else "(No steps evaluated)"
+
+    return f"""You are an experienced yoga instructor providing personalized feedback to a student who just performed Child's Pose (Balasana).
+
+This is a floor pose - the student is kneeling with forehead toward the mat and arms extended forward. Their alignment was scored on 6 key steps. Here is the per-step report:
+
+{steps_text}
+
+Overall final score: {final_score}/100
+
+Write personalized coaching feedback in this EXACT format:
+
+1. A single opening sentence acknowledging their performance (do NOT use "Summary:" as a prefix)
+2. A blank line
+3. The label "Areas Where You Did Well:" followed by 2-3 specific bullet points starting with "- "
+4. A blank line
+5. The label "Areas to Improve:" followed by up to 5 specific actionable bullet points starting with "- "
+6. A blank line
+7. A single closing motivational sentence (do NOT use "Motivation:" as a prefix)
+
+Important rules:
+- Address the student directly using "you" and "your"
+- Be specific to their actual scores and issues
+- Do NOT use the words "Summary:" or "Motivation:" anywhere
+- Each bullet point should be one line
+- Be warm and encouraging but honest about what needs work
+- If a step's score is >= 80, treat it as a strength (Did Well)
+- If a step's score is < 50, treat it as needing improvement
+- Mention each evaluated step at most once across both lists
+- Output ONLY the feedback itself - no preamble, no closing remarks like "Hope this helps"
+"""
 
 
-def get_rule_based_feedback(score, issues, steps=None):
-    """Fallback when no Gemini key or API call fails. No Summary:/Motivation: labels."""
-    visible = _visible_steps(steps)
+def _clean_feedback(text):
+    lines = text.split("\n")
+    cleaned = []
+    for line in lines:
+        stripped = line.strip()
+        low = stripped.lower()
+        if low.startswith("summary:"):
+            stripped = stripped.split(":", 1)[1].strip()
+        elif low.startswith("motivation:"):
+            stripped = stripped.split(":", 1)[1].strip()
+        cleaned.append(stripped if stripped != line.strip() else line)
+    return "\n".join(cleaned).strip()
 
-    # Opening sentence (no "Summary:" label)
-    if score is None or score == 0:
-        opening = "Could not evaluate your pose. Please re-record from the side with full body visible."
-    elif score >= 85:
-        opening = "Excellent! Your Child's Pose shows great relaxation and alignment."
-    elif score >= 70:
-        opening = "Good attempt. A few refinements will deepen your Child's Pose."
-    elif score >= 50:
-        opening = "Decent start. Focus on sinking hips to heels and lengthening through your spine and arms."
-    elif score >= 30:
-        opening = "Your pose needs work. Review the foundational shape - hips on heels, torso folded, arms extended."
+
+def _call_openrouter(prompt):
+    body = json.dumps({
+        "model": OPENROUTER_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 800,
+        "temperature": 0.7,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        OPENROUTER_URL,
+        data=body,
+        headers={
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://stillwater.app",
+            "X-Title": "Stillwater Pose Analysis",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=45) as response:
+        data = json.loads(response.read().decode("utf-8"))
+
+    return data["choices"][0]["message"]["content"].strip()
+
+
+def _rule_based_feedback(result):
+    visible = _visible_steps(result.get("steps", []))
+    final_score = result.get("final_score", 0)
+
+    well = [s for s in visible
+            if s.get("average_score", s.get("score", 0)) >= 80]
+    needs = [s for s in visible
+             if s.get("average_score", s.get("score", 0)) < 50]
+
+    if final_score >= 85:
+        opening = "Beautiful work on your Child's Pose - this is a deeply settled, well-aligned pose."
+        closing = "Keep returning to this pose as a resting place - your body knows it well now."
+    elif final_score >= 70:
+        opening = "A solid Child's Pose with good fundamentals to build on."
+        closing = "Continue to soften into the pose - the refinements will come with patience."
+    elif final_score >= 50:
+        opening = "A reasonable attempt at Child's Pose with several areas to refine."
+        closing = "Stay gentle with yourself - this is a restorative pose, not a performance."
     else:
-        opening = "This does not look like Child's Pose yet. Begin from tabletop and slowly lower your hips back."
+        opening = "Child's Pose is a resting pose - let's work through the foundations together."
+        closing = "Take it one breath at a time, and let the pose come to you."
 
-    well_done = [s for s in visible if s.get("passed_overall", s.get("passed", False))]
-    needs_work = [s for s in visible if not s.get("passed_overall", s.get("passed", False))]
-
-    lines = []
-    lines.append(opening)
-    lines.append("")
-
-    lines.append("Areas Where You Did Well:")
-    if well_done:
-        for s in well_done[:3]:
-            lines.append(f"- {s['name']}: solid alignment here.")
+    parts = [opening, "", "Areas Where You Did Well:"]
+    if well:
+        for s in well[:3]:
+            parts.append(f"- Your {s.get('name', 'this step')} alignment looked good in this pose.")
     else:
-        lines.append("- Keep practicing - every attempt builds awareness of the pose.")
-    lines.append("")
+        parts.append("- You showed up and gave it a try - that is the first step.")
 
-    lines.append("Areas to Improve:")
-    if needs_work:
-        for s in needs_work[:5]:
-            issue = s.get("issue") or s["cue"]
-            lines.append(f"- {s['name']}: {issue}")
+    parts.extend(["", "Areas to Improve:"])
+    if needs:
+        for s in needs[:5]:
+            issue = s.get("issue") or s.get("cue") or "review the alignment for this step"
+            parts.append(f"- {s.get('name', 'This step')}: {issue}")
     else:
-        lines.append("- No major issues detected - just keep refining.")
-    lines.append("")
+        parts.append("- Nothing major - keep refining the details.")
 
-    # Closing sentence (no "Motivation:" label)
-    lines.append("Stay patient with yourself - Child's Pose is a place to rest, not to strive.")
-
-    return "\n".join(lines)
+    parts.extend(["", closing])
+    return "\n".join(parts)
 
 
-def get_gemini_feedback(score, issues, steps=None):
-    """Generate coaching feedback via Gemini. Falls back to rule-based on failure."""
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        return get_rule_based_feedback(score, issues, steps)
+def generate_feedback(*args, **kwargs):
+    """
+    Flexible entry point - accepts dict or keyword arguments.
+    Returns a feedback string for the result page.
+    """
+    result = _normalize_input(*args, **kwargs)
+
+    if not OPENROUTER_API_KEY:
+        print("[feedback] OPENROUTER_API_KEY not set - using rule-based fallback")
+        return _rule_based_feedback(result)
 
     try:
-        from google import genai
-        client = genai.Client(api_key=api_key)
+        prompt = _build_prompt(result)
+        raw = _call_openrouter(prompt)
+        return _clean_feedback(raw)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="ignore")
+        print(f"[feedback] OpenRouter HTTPError {e.code}: {body[:300]}")
+        return _rule_based_feedback(result)
+    except Exception as e:
+        print(f"[feedback] OpenRouter error: {e!r}")
+        return _rule_based_feedback(result)
 
-        step_summary = _build_step_summary(steps)
-        issues_text = ("\n".join(f"- {i}" for i in issues) if issues else "- None significant")
 
-        prompt = f"""
-You are an honest, kind, knowledgeable yoga teacher.
-
-A student performed Child's Pose. Below is the step-by-step report,
-including ONLY the steps we could clearly evaluate. Be HONEST about the score -
-if it's low, do not pretend the pose was good.
-
-OVERALL SCORE: {score}/100
-
-SCORING GUIDE:
-  90-100  Excellent - small refinements only
-  75-89   Good - a couple of clear corrections
-  55-74   Mixed - several real issues
-  30-54   Poor - the pose is not Child's Pose yet
-   0-29   Very poor - explicitly say it does not look like the pose
-
-STEP-BY-STEP REPORT (only evaluable steps):
-{step_summary}
-
-KEY ISSUES OBSERVED:
-{issues_text}
-
-Write feedback in EXACTLY this format. DO NOT include the words "Summary:"
-or "Motivation:" or any label prefix. Output the sentences directly.
-
-<one honest opening sentence matching the score - no label prefix>
-
-Areas Where You Did Well:
-- <observation 1 - reference a specific step that passed>
-- <observation 2 - another positive>
-- <optional third positive, only if there are at least 3 passing steps>
-
-Areas to Improve:
-- <improvement 1 - most important fix>
-- <improvement 2>
-- <improvement 3>
-- <improvement 4 - only if needed>
-- <improvement 5 - only if needed>
-
-<one warm closing sentence - no label prefix>
-
-CRITICAL RULES:
-- DO NOT write "Summary:" before the opening sentence. Just write the sentence.
-- DO NOT write "Motivation:" before the closing sentence. Just write the sentence.
-- "Areas Where You Did Well" must have 2-3 lines max.
-- "Areas to Improve" must have at most 5 lines (skip lines if fewer real issues).
-- Only reference steps that appear in the report (skip ones not listed).
-- Reference specific step names when possible.
-- Match tone to the score band - NEVER call a sub-50 pose "good".
-- Keep each bullet short - one short sentence.
-"""
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-        )
-        text = response.text.strip()
-
-        # Safety net: strip leading labels if Gemini still includes them
-        lines = text.split("\n")
-        cleaned = []
-        for line in lines:
-            stripped = line.strip()
-            for label in ("Summary:", "Motivation:", "summary:", "motivation:"):
-                if stripped.startswith(label):
-                    line = line.replace(label, "", 1).lstrip()
-                    break
-            cleaned.append(line)
-        return "\n".join(cleaned).strip()
-    except Exception:
-        return get_rule_based_feedback(score, issues, steps)
+# Backwards-compatible alias - app.py imports this name
+get_gemini_feedback = generate_feedback
